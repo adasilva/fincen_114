@@ -13,6 +13,7 @@ import beancount.core.realization
 import beancount.core.data
 import beancount.parser
 from beancount.utils.date_utils import iter_dates
+import pandas as pd
 
 def get_date(p):
     if isinstance(p, beancount.core.data.Posting):
@@ -61,7 +62,7 @@ def iter_year(year, account_postings, inventory, price_map):
         while txn and get_date(txn) <= date:
             add_position(txn, inventory)
             txn = next(postings, None)
-        yield date, inventory.reduce(beancount.core.convert.convert_position, 'USD', price_map, date)
+        yield date, inventory.reduce(beancount.core.convert.convert_position, 'USD', price_map, date), inventory.reduce(beancount.core.convert.convert_position, 'CAD', price_map, date)
 
 def get_account_number(account, keys):
     for k in keys:
@@ -99,6 +100,8 @@ if __name__ == '__main__':
     realized_accounts = beancount.core.realization.postings_by_account(entries)
     price_map = beancount.core.prices.build_price_map(entries)
 
+    rows = []
+
     for account, (open, close) in accounts_sorted:
         if args.only_account and account not in args.only_account: continue
 
@@ -113,10 +116,26 @@ if __name__ == '__main__':
             # now we need to iterate day-by-day through the year. We add any new
             # postings and then reduce to a price. Then see if that is the highest
             # price seen so far....
+            max_value_date = None
             max_value = 0
-            for (date, balance) in iter_year(args.year, account_postings, inventory, price_map):
-                usd_value = balance.get_currency_units('USD')
-                max_value = max(max_value, int(usd_value.number))
+            max_value_cad = 0
+            for (date, balance_usd, balance_cad) in iter_year(args.year, account_postings, inventory, price_map):
+                # breakpoint()
+                usd_value = balance_usd.get_currency_units('USD')
+                cad_value = balance_cad.get_currency_units('CAD')
+                if int(usd_value.number)>max_value:
+                    max_value = max(max_value, int(usd_value.number))
+                    max_value_cad = max(max_value_cad, int(cad_value.number))
+                    max_value_date = date
 
             account_number = get_account_number(open, args.meta_account_number)
-            print(account, fmt_d(max_value), account_number)
+            rows.append({
+                "account": account,
+                "account_number": account_number,
+                "date": max_value_date,
+                "cad": max_value_cad,
+                "usd": max_value
+            })
+            df = pd.DataFrame(rows)
+            df.to_csv("summary.csv", index=False)
+            print(account, 'CAD: ', fmt_d(max_value_cad), 'USD: ', fmt_d(max_value), account_number)
